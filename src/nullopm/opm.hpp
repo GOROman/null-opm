@@ -82,6 +82,18 @@ struct State {
     Callbacks cb;
 };
 
+/// YM3012 DAC model: the chip sends each sample as a 3-bit exponent and a
+/// 10-bit mantissa (sign included). Values beyond +-511 lose their low bits.
+/// The result is the linear value the DAC reconstructs, in 16-bit range.
+inline int32_t dac_quantize(int32_t v) noexcept {
+    if (v > 32767) v = 32767;
+    if (v < -32768) v = -32768;
+    uint32_t e = 1;
+    while (e < 7 && (v >= (512 << (e - 1)) || v < -(512 << (e - 1)))) ++e;
+    const int32_t m = v >> (e - 1); // arithmetic shift, truncation toward -inf
+    return m << (e - 1);
+}
+
 } // namespace detail
 
 /// One YM2151 chip. Copyable (copying is a save-state); no heap, no global state.

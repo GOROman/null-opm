@@ -298,28 +298,90 @@ void Opm::begin_sample() noexcept {
     s_.eg_counter++;
 }
 
-void Opm::run_slot(uint32_t slot) noexcept {
-    detail::OpState& o = s_.op[slot];
-    detail::ChState& c = s_.ch[slot & 7];
+// Processing order of the 32 operator slots within a sample. Operators are
+// indexed slot*8+ch (M1 = 0..7, M2 = 8..15, C1 = 16..23, C2 = 24..31), so the
+// identity order is "register order". A modulator processed earlier in the
+// sample feeds its carrier in the same sample; one processed later feeds it in
+// the next sample. TUNED: the exact hardware order is to be fixed in M8.
+static inline uint32_t slot_to_op(uint32_t slot) noexcept { return slot; }
+
+// Modulation input for operator `slot` of channel c according to the algorithm.
+// Operator outputs are 14-bit signed; the phase input uses them >> 1.
+static inline int32_t mod_input(const detail::State& s, int ch, int slot, int con) noexcept {
+    const int32_t m1 = s.op[op_index(0, ch)].out0;
+    const int32_t m2 = s.op[op_index(1, ch)].out0;
+    const int32_t c1 = s.op[op_index(2, ch)].out0;
+    switch (slot) {
+    case 1: // M2
+        switch (con) {
+        case 0: return c1;
+        case 1: return m1 + c1;
+        case 2: return c1;
+        case 5: return m1;
+        default: return 0;
+        }
+    case 2: // C1
+        switch (con) {
+        case 0: case 3: case 4: case 5: case 6: return m1;
+        default: return 0;
+        }
+    case 3: // C2
+        switch (con) {
+        case 0: case 1: return m2;
+        case 2: return m1 + m2;
+        case 3: return c1 + m2;
+        case 4: return m2;
+        case 5: return m1;
+        default: return 0;
+        }
+    default: return 0; // M1 uses feedback only
+    }
+}
+
+// Whether operator `slot` is a carrier (summed into the channel output).
+static inline bool is_carrier(int slot, int con) noexcept {
+    switch (slot) {
+    case 0: return con == 7;
+    case 1: return con >= 5;
+    case 2: return con >= 4;
+    default: return true;
+    }
+}
+
+void Opm::run_slot(uint32_t cycle) noexcept {
+    const uint32_t op = slot_to_op(cycle);
+    const int ch = static_cast<int>(op & 7);
+    const int slot = static_cast<int>(op >> 3);
+    detail::OpState& o = s_.op[op];
+    detail::ChState& c = s_.ch[ch];
     eg_step(o, (c.kc >> 2) & 31u);
+
+    int32_t mod;
+    if (slot == 0) {
+        // M1 self-feedback from its two previous outputs (averaged by the >> 1).
+        mod = c.fb ? (static_cast<int32_t>(o.out0) + o.out1) >> (10 - c.fb) : 0;
+    } else {
+        mod = mod_input(s_, ch, slot, c.con) >> 1;
+    }
     uint32_t att = o.eg_level + (static_cast<uint32_t>(o.tl) << 3);
     if (att > 1023) att = 1023;
-    const int32_t out = op_output(o.phase >> 10, att << 2);
+    const uint32_t phase10 = ((o.phase >> 10) + static_cast<uint32_t>(mod)) & 0x3FF;
+    const int32_t out = op_output(phase10, att << 2);
     o.phase = (o.phase + o.phase_inc) & 0xFFFFF;
     o.out1 = o.out0;
     o.out0 = static_cast<int16_t>(out);
-    // M1: every operator is treated as a carrier.
-    c.acc += out;
-    if ((slot >> 3) == 3) { // last slot of this channel for this sample
+    if (is_carrier(slot, c.con)) c.acc += out;
+}
+
+void Opm::end_sample() noexcept {
+    for (int ch = 0; ch < kChannels; ++ch) {
+        detail::ChState& c = s_.ch[ch];
         if (c.pan & 1) s_.mix_l += c.acc;
         if (c.pan & 2) s_.mix_r += c.acc;
         c.acc = 0;
     }
-}
-
-void Opm::end_sample() noexcept {
-    s_.out_l = s_.mix_l;
-    s_.out_r = s_.mix_r;
+    s_.out_l = detail::dac_quantize(s_.mix_l);
+    s_.out_r = detail::dac_quantize(s_.mix_r);
 }
 
 void Opm::update_lfo() noexcept {}

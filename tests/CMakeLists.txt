@@ -4,6 +4,7 @@ add_executable(nullopm_tests
   test_tables.cpp
   test_pg.cpp
   test_eg.cpp
+  test_alg.cpp
 )
 target_link_libraries(nullopm_tests PRIVATE nullopm)
 target_include_directories(nullopm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

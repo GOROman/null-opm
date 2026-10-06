@@ -15,7 +15,7 @@ Clean-room, cycle-accurate YAMAHA **YM2151 (OPM)** FM synthesizer emulator in C+
 | Register file, write latch, busy flag | done (M0) |
 | Phase generator (KC/KF/DT1/DT2/MUL), log-sin/exp | done (M1) |
 | Envelope generator | done (M2) |
-| Algorithms, feedback, pan, YM3012 DAC | planned (M3) |
+| Algorithms, feedback, pan, YM3012 DAC | done (M3) |
 | LFO (PM/AM) | planned (M4) |
 | Noise | planned (M5) |
 | Timers, IRQ, CT, CSM | planned (M6) |
