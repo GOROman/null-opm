@@ -17,3 +17,6 @@ endif()
 
 add_executable(vgm2wav vgm2wav/main.cpp)
 target_link_libraries(vgm2wav PRIVATE nullopm_tools_common)
+
+add_executable(wavdiff wavdiff/main.cpp)
+target_link_libraries(wavdiff PRIVATE nullopm_tools_common)

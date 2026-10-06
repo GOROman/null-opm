@@ -1,0 +1,12 @@
+# single carrier A4, 0.2 s
+clock 3579545
+w 20 C7
+w 28 4A
+w 58 01
+w 78 00
+w 98 1F
+w F8 0F
+w 08 40
+wait 6000
+w 08 00
+end 8820

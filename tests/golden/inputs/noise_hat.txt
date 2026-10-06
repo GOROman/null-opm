@@ -1,0 +1,23 @@
+# noise hi-hat on channel 7 with fast decay, plus timer A driven CSM burst
+clock 3579545
+w 0F 9C
+w 27 C7
+w 2F 60
+w 5F 01
+w 7F 10
+w 9F 1F
+w BF 14
+w DF 00
+w FF 5F
+w 08 47
+wait 4410
+w 08 47
+wait 4410
+w 08 47
+wait 4410
+w 10 F0
+w 11 00
+w 14 81
+wait 4410
+w 14 00
+end 22050
