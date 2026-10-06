@@ -1,5 +1,6 @@
+add_subdirectory(wasm)
 if(NOT TARGET nullopm_tools_common)
-  message(STATUS "null-opm: examples need NULLOPM_BUILD_TOOLS; skipping")
+  message(STATUS "null-opm: pc examples need NULLOPM_BUILD_TOOLS; skipping")
   return()
 endif()
 add_executable(play_sine pc/play_sine.cpp)

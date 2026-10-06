@@ -20,8 +20,8 @@ Clean-room, cycle-accurate YAMAHA **YM2151 (OPM)** FM synthesizer emulator in C+
 | Noise | done (M5) |
 | Timers, IRQ, CT, CSM | done (M6) |
 | VGM → WAV tool | done (M7, `vgm2wav`) |
-| Reference comparison harness | planned (M8) |
-| WASM demo / MCU examples | planned (M9/M10) |
+| Reference comparison harness | done (M8, `wavdiff`, `tests/scripts`) |
+| WASM demo / MCU examples | done (M9/M10, `examples/`) |
 
 ## Build
 
@@ -31,11 +31,22 @@ cmake --build --preset default
 ctest --preset default
 ```
 
-WebAssembly:
+WebAssembly (then serve `build-wasm/examples/wasm/` and open `index.html`):
 
 ```sh
 emcmake cmake --preset wasm && cmake --build --preset wasm
 ```
+
+MCUs: see [docs/PORTING.md](docs/PORTING.md) and `examples/arduino`, `examples/pico`,
+`examples/esp-idf`.
+
+## Documentation
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): timing model, pipeline, tables, fixed-point formats
+- [docs/REGISTERS.md](docs/REGISTERS.md): register map
+- [docs/API.md](docs/API.md): C++ and C API
+- [docs/TESTING.md](docs/TESTING.md): unit tests, goldens, reference comparison
+- [docs/CLEANROOM.md](docs/CLEANROOM.md): clean-room policy and sources
 
 ## Tools
 

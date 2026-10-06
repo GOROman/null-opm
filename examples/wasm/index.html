@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>null-opm player</title>
+<style>
+  :root { --bg: #fff; --fg: #111; --accent: #c0392b; --mute: #777; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #16181c; --fg: #eee; --mute: #999; } }
+  body { margin: 0; padding: 16px; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); max-width: 720px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  .drop { border: 2px dashed var(--mute); border-radius: 8px; padding: 24px; text-align: center; margin: 12px 0; }
+  .drop.over { border-color: var(--accent); }
+  button { font: inherit; padding: 6px 14px; margin-right: 8px; }
+  pre { font-size: 12px; background: rgba(127,127,127,.12); padding: 8px; overflow-x: auto; }
+  .regs span { display: inline-block; width: 2.2em; font-family: ui-monospace, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>null-opm: YM2151 in your browser</h1>
+<p>Drop a <code>.vgm</code> (uncompressed) file below or load the built-in test tone. Audio runs at the chip's native 55930 Hz when the browser allows it.</p>
+<div class="drop" id="drop">drop .vgm here, or <input type="file" id="file" accept=".vgm"></div>
+<p><button id="tone">Test tone</button><button id="stop">Stop</button> <span id="status" style="color:var(--mute)"></span></p>
+<pre id="info"></pre>
+<div class="regs" id="regs"></div>
+<script src="nullopm.js"></script>
+<script>
+(async () => {
+  const Module = await createNullOpm();
+  const CLOCK = 3579545;
+  const chip = Module._nullopm_create(CLOCK);
+  const rate = Module._nullopm_sample_rate(chip);
+  const $ = id => document.getElementById(id);
+  $('status').textContent = 'null-opm ' + Module.UTF8ToString(Module._nullopm_version()) + ', chip rate ' + rate + ' Hz';
+
+  let ctx = null, node = null, events = [], evIndex = 0, timeVgm = 0, shadow = new Uint8Array(256), running = false;
+  const FRAMES = 2048;
+  const buf = Module._malloc(FRAMES * 4);
+
+  function ensureAudio() {
+    if (ctx) return;
+    try { ctx = new AudioContext({ sampleRate: rate }); } catch (e) { ctx = new AudioContext(); }
+    node = ctx.createScriptProcessor(FRAMES, 0, 2);
+    const ratio = rate / ctx.sampleRate; // chip samples per output sample
+    let carry = 0, last = [0, 0];
+    node.onaudioprocess = e => {
+      const L = e.outputBuffer.getChannelData(0), R = e.outputBuffer.getChannelData(1);
+      const needChip = Math.ceil(L.length * ratio) + 2;
+      const out = renderChip(needChip);
+      for (let i = 0; i < L.length; i++) {
+        const pos = i * ratio + carry;
+        const j = Math.min(out.length / 2 - 1, Math.floor(pos));
+        L[i] = out[2 * j] / 32768; R[i] = out[2 * j + 1] / 32768;
+      }
+      carry = (L.length * ratio + carry) % 1;
+    };
+    node.connect(ctx.destination);
+  }
+  function write(a, d) { shadow[a] = d; Module._nullopm_write_reg(chip, a, d); }
+  // Advances the register stream by n chip samples and renders them.
+  function renderChip(n) {
+    const out = new Int16Array(n * 2);
+    let done = 0;
+    while (done < n) {
+      // chip samples until the next event
+      let chunk = n - done;
+      if (running && evIndex < events.length) {
+        const ev = events[evIndex];
+        const dtVgm = ev.t - timeVgm;
+        const dtChip = Math.floor(dtVgm * rate / 44100);
+        if (dtChip <= 0) { write(ev.a, ev.d); evIndex++; continue; }
+        chunk = Math.min(chunk, dtChip);
+      }
+      Module._nullopm_generate_i16(chip, buf, chunk);
+      out.set(Module.HEAP16.subarray(buf >> 1, (buf >> 1) + chunk * 2), done * 2);
+      done += chunk;
+      timeVgm += chunk * 44100 / rate;
+    }
+    if (running && evIndex >= events.length && loopIndex >= 0) { evIndex = loopIndex; timeVgm = events[loopIndex].t; }
+    return out;
+  }
+  let loopIndex = -1;
+  function parseVgm(bytes) {
+    const dv = new DataView(bytes.buffer);
+    if (new TextDecoder().decode(bytes.subarray(0, 4)) !== 'Vgm ') throw new Error('not a VGM');
+    const version = dv.getUint32(8, true);
+    let pos = 0x40;
+    if (version >= 0x150) { const off = dv.getUint32(0x34, true); if (off) pos = 0x34 + off; }
+    const loopOff = dv.getUint32(0x1C, true);
+    const loopPos = loopOff ? 0x1C + loopOff : -1;
+    const evs = []; let t = 0; let li = -1;
+    while (pos < bytes.length) {
+      if (pos === loopPos) li = evs.length;
+      const c = bytes[pos];
+      if (c === 0x54) { evs.push({ t, a: bytes[pos + 1], d: bytes[pos + 2] }); pos += 3; }
+      else if (c === 0x61) { t += dv.getUint16(pos + 1, true); pos += 3; }
+      else if (c === 0x62) { t += 735; pos++; }
+      else if (c === 0x63) { t += 882; pos++; }
+      else if (c === 0x66) break;
+      else if (c >= 0x70 && c <= 0x7F) { t += (c & 15) + 1; pos++; }
+      else if (c >= 0x80 && c <= 0x8F) { t += c & 15; pos++; }
+      else if (c === 0x67) { pos += 7 + dv.getUint32(pos + 3, true); }
+      else if (c === 0x68) pos += 12;
+      else if (c === 0x4F || c === 0x50 || (c >= 0x30 && c <= 0x3F) || c === 0x94) pos += 2;
+      else if ((c >= 0x51 && c <= 0x5F) || (c >= 0xA0 && c <= 0xBF) || (c >= 0x40 && c <= 0x4E)) pos += 3;
+      else if (c >= 0xC0 && c <= 0xDF) pos += 4;
+      else if (c >= 0xE0 || c === 0x90 || c === 0x91 || c === 0x95) pos += 5;
+      else if (c === 0x92) pos += 6;
+      else if (c === 0x93) pos += 11;
+      else throw new Error('unknown command 0x' + c.toString(16));
+    }
+    return { evs, loopIndex: li, clock: version >= 0x110 ? dv.getUint32(0x30, true) & 0x3FFFFFFF : 0, total: t };
+  }
+  function start(evs, li, info) {
+    ensureAudio();
+    Module._nullopm_reset(chip); shadow.fill(0);
+    events = evs; loopIndex = li; evIndex = 0; timeVgm = 0; running = true;
+    $('info').textContent = info;
+    ctx.resume();
+  }
+  function load(bytes, name) {
+    try {
+      const v = parseVgm(bytes);
+      start(v.evs, v.loopIndex, name + '\n' + v.evs.length + ' YM2151 writes, ' + (v.total / 44100).toFixed(1) + ' s, clock ' + (v.clock || CLOCK) + ' Hz' + (v.clock && v.clock !== CLOCK ? ' (rendered at ' + CLOCK + ')' : ''));
+    } catch (e) { $('info').textContent = 'error: ' + e.message; }
+  }
+  $('tone').onclick = () => {
+    const evs = []; const w = (a, d) => evs.push({ t: 0, a, d });
+    w(0x20, 0xC5); w(0x28, 0x4A);
+    [[0x40,0x31],[0x48,0x02],[0x50,0x01],[0x58,0x01],[0x60,0x20],[0x68,0x18],[0x70,0],[0x78,0],
+     [0x80,0x1F],[0x88,0x1F],[0x90,0x1F],[0x98,0x1F],[0xA0,0x0A],[0xA8,0x08],[0xB0,0x06],[0xB8,0x06],
+     [0xE0,0x2F],[0xE8,0x2F],[0xF0,0x3F],[0xF8,0x3F],[0x08,0x78]].forEach(([a,d]) => w(a,d));
+    evs.push({ t: 44100, a: 0x08, d: 0x00 });
+    start(evs, 0, 'built-in test tone (loops)');
+  };
+  $('stop').onclick = () => { running = false; if (ctx) ctx.suspend(); };
+  $('file').onchange = async e => { const f = e.target.files[0]; if (f) load(new Uint8Array(await f.arrayBuffer()), f.name); };
+  const drop = $('drop');
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = async e => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) load(new Uint8Array(await f.arrayBuffer()), f.name); };
+  // register viewer
+  const regs = $('regs');
+  setInterval(() => {
+    let html = '';
+    for (let a = 0; a < 256; a += 16) { html += '<div>' + a.toString(16).padStart(2, '0') + ': '; for (let i = 0; i < 16; i++) html += '<span>' + shadow[a + i].toString(16).padStart(2, '0') + '</span>'; html += '</div>'; }
+    regs.innerHTML = html;
+  }, 250);
+})();
+</script>
+</body>
+</html>

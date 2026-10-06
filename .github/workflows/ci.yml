@@ -34,8 +34,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: mymindstorm/setup-emsdk@v14
-      - run: emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release -DNULLOPM_BUILD_TESTS=OFF -DNULLOPM_BUILD_TOOLS=OFF -DNULLOPM_BUILD_EXAMPLES=OFF
+      - run: emcmake cmake -S . -B build-wasm -DCMAKE_BUILD_TYPE=Release -DNULLOPM_BUILD_TESTS=OFF -DNULLOPM_BUILD_TOOLS=OFF
       - run: cmake --build build-wasm --parallel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nullopm-wasm
+          path: |
+            build-wasm/examples/wasm/nullopm.js
+            build-wasm/examples/wasm/nullopm.wasm
+            build-wasm/examples/wasm/index.html
+
+  arduino:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/arduino-lint-action@v1
+        with:
+          library-manager: update
+          compliance: specification
+      - uses: arduino/setup-arduino-cli@v1
+      - run: arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - run: arduino-cli core install esp32:esp32 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - run: mkdir -p ~/Arduino/libraries && ln -s "$PWD" ~/Arduino/libraries/null-opm
+      - run: arduino-cli compile --fqbn esp32:esp32:esp32 examples/arduino/NullOpmBasic
 
   format:
     runs-on: ubuntu-latest
