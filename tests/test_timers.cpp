@@ -63,12 +63,12 @@ TEST_CASE("no flag without IRQ enable; reset bits clear flags; IRQ pin and callb
     w(c, 0x10, 0xFF);
     w(c, 0x11, 0x03); // N = 1023 -> overflow every sample
     w(c, 0x14, 0x01); // load, no IRQ enable
-    int32_t l, r;
-    c.generate(&l, &r, 8);
+    int32_t l[8], r[8];
+    c.generate(l, r, 8);
     CHECK((c.read_status() & status::kTimerA) == 0);
     CHECK_FALSE(c.irq_asserted());
     w(c, 0x14, 0x05);
-    c.generate(&l, &r, 4);
+    c.generate(l, r, 4);
     CHECK((c.read_status() & status::kTimerA) != 0);
     CHECK(c.irq_asserted());
     CHECK(irq_calls == 1);
@@ -78,7 +78,7 @@ TEST_CASE("no flag without IRQ enable; reset bits clear flags; IRQ pin and callb
     CHECK_FALSE(c.irq_asserted());
     CHECK(irq_calls == 2);
     w(c, 0x14, 0x10); // stop timer and clear
-    c.generate(&l, &r, 8);
+    c.generate(l, r, 8);
     CHECK((c.read_status() & status::kTimerA) == 0);
 }
 

@@ -91,7 +91,7 @@ inline int32_t dac_quantize(int32_t v) noexcept {
     uint32_t e = 1;
     while (e < 7 && (v >= (512 << (e - 1)) || v < -(512 << (e - 1)))) ++e;
     const int32_t m = v >> (e - 1); // arithmetic shift, truncation toward -inf
-    return m << (e - 1);
+    return m * (1 << (e - 1));      // multiply: shifting a negative value is UB
 }
 
 } // namespace detail

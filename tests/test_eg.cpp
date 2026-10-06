@@ -116,8 +116,8 @@ TEST_CASE("release goes to 1023 at rate 2*(2*RR+1)") {
     e.rr = 4;
     setup(c, e);
     key_on(c);
-    int32_t l, r;
-    c.generate(&l, &r, 16);
+    int32_t l[16], r[16];
+    c.generate(l, r, 16);
     key_off(c);
     const uint32_t rate = 2u * (2 * 4 + 1) + 2;
     const double expect = expected_samples(rate, 1023);
