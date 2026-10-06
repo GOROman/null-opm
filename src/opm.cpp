@@ -127,6 +127,10 @@ void Opm::commit_write(uint8_t addr, uint8_t data) noexcept {
     }
     switch (addr) {
     case reg::kTest: s_.lfo.reset = (data >> 1) & 1; break;
+    case reg::kNoise:
+        s_.noise.enable = data >> 7;
+        s_.noise.freq = data & 31;
+        break;
     case reg::kLfoFreq: s_.lfo.freq = data; break;
     case reg::kLfoDepth:
         if (data & 0x80) s_.lfo.pmd = data & 0x7F;
@@ -256,6 +260,21 @@ static inline uint32_t am_attenuation(uint32_t am, uint32_t ams) noexcept {
     }
 }
 
+// --- noise generator ----------------------------------------------------------
+//
+// Datasheet: noise frequency = clock / (32 * (32 - NFRQ)), i.e. the 17-bit LFSR
+// is clocked at clock/32 (twice per sample) divided by (32 - NFRQ). When NE is
+// set the noise bit replaces the sine of channel 7's C2 operator; its envelope
+// and TL still apply.
+void Opm::update_noise() noexcept {
+    detail::Noise& n = s_.noise;
+    if (++n.counter < static_cast<uint8_t>(32 - n.freq)) return;
+    n.counter = 0;
+    const uint32_t bit = ((n.lfsr >> 0) ^ (n.lfsr >> 3)) & 1; // x^17 + x^14 + 1
+    n.lfsr = (n.lfsr >> 1) | (bit << 16);
+    n.out = static_cast<uint8_t>(n.lfsr & 1);
+}
+
 // --- envelope generator -----------------------------------------------------
 //
 // 10-bit attenuation (0 = loudest, 1023 = silent), 48 dB / 512 per step. A global
@@ -371,6 +390,7 @@ void Opm::clock() noexcept {
     }
     const uint8_t cyc = s_.cycle;
     if (cyc == 0) begin_sample();
+    if ((cyc & 15) == 0) update_noise(); // clock / 32
     run_slot(cyc);
     if (cyc == kCyclesPerSample - 1) {
         end_sample();
@@ -456,7 +476,13 @@ void Opm::run_slot(uint32_t cycle) noexcept {
     if (o.ame) att += am_attenuation(s_.lfo.am, c.ams);
     if (att > 1023) att = 1023;
     const uint32_t phase10 = ((o.phase >> 10) + static_cast<uint32_t>(mod)) & 0x3FF;
-    const int32_t out = op_output(phase10, att << 2);
+    int32_t out;
+    if (op == 31 && s_.noise.enable) {
+        // Noise: full-scale sine peak (log-sin index 0xFF) with the LFSR bit as sign.
+        out = op_output(s_.noise.out ? 0x0FFu : 0x2FFu, att << 2);
+    } else {
+        out = op_output(phase10, att << 2);
+    }
     o.phase = (o.phase + o.phase_inc) & 0xFFFFF;
     o.out1 = o.out0;
     o.out0 = static_cast<int16_t>(out);
@@ -474,7 +500,6 @@ void Opm::end_sample() noexcept {
     s_.out_r = detail::dac_quantize(s_.mix_r);
 }
 
-void Opm::update_noise() noexcept {}
 void Opm::update_timers() noexcept {}
 
 // --- rendering ------------------------------------------------------------
