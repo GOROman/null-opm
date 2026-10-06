@@ -127,6 +127,27 @@ void Opm::commit_write(uint8_t addr, uint8_t data) noexcept {
     }
     switch (addr) {
     case reg::kTest: s_.lfo.reset = (data >> 1) & 1; break;
+    case reg::kTimerAHi:
+        s_.timers.a_period = static_cast<uint16_t>((s_.timers.a_period & 3) | (data << 2));
+        break;
+    case reg::kTimerALo:
+        s_.timers.a_period = static_cast<uint16_t>((s_.timers.a_period & 0x3FC) | (data & 3));
+        break;
+    case reg::kTimerB: s_.timers.b_period = data; break;
+    case reg::kTimerCtrl: {
+        detail::Timers& t = s_.timers;
+        const uint8_t prev = t.ctrl;
+        t.ctrl = data & 0x8F; // CSM, IRQ enable B/A, load B/A (reset bits are not stored)
+        if ((data & 1) && !(prev & 1)) t.a_count = t.a_period; // load A on 0 -> 1
+        if ((data & 2) && !(prev & 2)) {
+            t.b_count = t.b_period;
+            t.b_prescale = 0;
+        }
+        if (data & 0x10) t.status &= static_cast<uint8_t>(~status::kTimerA);
+        if (data & 0x20) t.status &= static_cast<uint8_t>(~status::kTimerB);
+        set_irq(t.status != 0);
+        break;
+    }
     case reg::kNoise:
         s_.noise.enable = data >> 7;
         s_.noise.freq = data & 31;
@@ -260,6 +281,37 @@ static inline uint32_t am_attenuation(uint32_t am, uint32_t ams) noexcept {
     }
 }
 
+// --- timers ----------------------------------------------------------------------
+//
+// Timer A: 10 bits, one count per sample (64 master clocks): period (1024 - N).
+// Timer B: 8 bits, one count per 16 samples (1024 master clocks): period 16 * (256 - N).
+// On overflow the counter reloads; if the timer's IRQ enable bit is set the
+// status flag is raised and the IRQ pin follows the flags. With CSM set, a
+// Timer A overflow keys on every operator for one sample.
+void Opm::update_timers() noexcept {
+    detail::Timers& t = s_.timers;
+    bool a_overflow = false;
+    if (t.ctrl & 1) {
+        if (++t.a_count >= 1024) {
+            t.a_count = t.a_period;
+            a_overflow = true;
+            if (t.ctrl & 4) t.status |= status::kTimerA;
+        }
+    }
+    if (t.ctrl & 2) {
+        if (++t.b_prescale >= 16) {
+            t.b_prescale = 0;
+            if (++t.b_count == 0) { // 8-bit wrap
+                t.b_count = t.b_period;
+                if (t.ctrl & 8) t.status |= status::kTimerB;
+            }
+        }
+    }
+    set_irq(t.status != 0);
+    const uint8_t csm = (a_overflow && (t.ctrl & 0x80)) ? 1 : 0;
+    for (auto& o : s_.op) o.key_csm = csm;
+}
+
 // --- noise generator ----------------------------------------------------------
 //
 // Datasheet: noise frequency = clock / (32 * (32 - NFRQ)), i.e. the 17-bit LFSR
@@ -321,8 +373,9 @@ static inline uint32_t d1l_level(uint32_t d1l) noexcept { return (d1l == 15 ? 31
 
 void Opm::eg_step(detail::OpState& o, uint32_t keycode) noexcept {
     // Key transitions are sampled here, once per sample at the operator's slot.
-    if (o.key != o.key_on) {
-        o.key_on = o.key;
+    const uint8_t key = o.key | o.key_csm;
+    if (key != o.key_on) {
+        o.key_on = key;
         if (o.key_on) {
             o.phase = 0;
             o.eg_state = kEgAttack;
@@ -404,6 +457,7 @@ void Opm::begin_sample() noexcept {
     s_.mix_l = 0;
     s_.mix_r = 0;
     s_.eg_counter++;
+    update_timers();
     update_lfo();
 }
 
@@ -500,7 +554,6 @@ void Opm::end_sample() noexcept {
     s_.out_r = detail::dac_quantize(s_.mix_r);
 }
 
-void Opm::update_timers() noexcept {}
 
 // --- rendering ------------------------------------------------------------
 

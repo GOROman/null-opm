@@ -8,6 +8,7 @@ add_executable(nullopm_tests
   test_vgm.cpp
   test_lfo.cpp
   test_noise.cpp
+  test_timers.cpp
 )
 target_link_libraries(nullopm_tests PRIVATE nullopm_tools_common)
 target_include_directories(nullopm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
