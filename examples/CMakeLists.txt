@@ -1,0 +1,6 @@
+if(NOT TARGET nullopm_tools_common)
+  message(STATUS "null-opm: examples need NULLOPM_BUILD_TOOLS; skipping")
+  return()
+endif()
+add_executable(play_sine pc/play_sine.cpp)
+target_link_libraries(play_sine PRIVATE nullopm nullopm_tools_common)

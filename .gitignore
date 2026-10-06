@@ -1,0 +1,10 @@
+build/
+build-*/
+out/
+.cache/
+*.wav
+!tests/golden/*.wav
+tests/ref/*/
+__pycache__/
+.DS_Store
+compile_commands.json

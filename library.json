@@ -1,0 +1,11 @@
+{
+  "name": "null-opm",
+  "version": "0.1.0",
+  "description": "Clean-room cycle-accurate YAMAHA YM2151 (OPM) FM synthesizer emulator",
+  "keywords": "ym2151, opm, fm, synthesizer, emulator, audio",
+  "repository": { "type": "git", "url": "https://github.com/GOROman/null-opm.git" },
+  "license": "MIT",
+  "frameworks": "*",
+  "platforms": "*",
+  "build": { "srcDir": "src", "includeDir": "src" }
+}
