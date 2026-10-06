@@ -130,7 +130,7 @@ private:
     void run_slot(uint32_t slot) noexcept;
     void begin_sample() noexcept;
     void end_sample() noexcept;
-    void update_eg_timing() noexcept;
+    void eg_step(detail::OpState& o, uint32_t keycode) noexcept;
     void update_lfo() noexcept;
     void update_noise() noexcept;
     void update_timers() noexcept;

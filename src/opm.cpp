@@ -168,6 +168,96 @@ void Opm::recompute_phase_inc(int op) noexcept {
     o.phase_inc = inc & 0xFFFFF;
 }
 
+// --- envelope generator -----------------------------------------------------
+//
+// 10-bit attenuation (0 = loudest, 1023 = silent), 48 dB / 512 per step. A global
+// counter advances once per sample. For an effective rate r (0..63):
+//   r < 48 : a step occurs every 2^(11 - r/4) samples; within each group of 8
+//            steps, 4 + (r & 3) of them apply an increment of 1.
+//   r >= 48: every sample applies an increment from the 1,2,4,8 pattern rows.
+// Rates +4 double the speed, matching the datasheet's rate/time tables where
+// each row halves the time of the row four rates below.
+
+static inline uint32_t eg_effective_rate(uint32_t r, uint32_t ks, uint32_t keycode) noexcept {
+    if (r == 0) return 0;
+    const uint32_t rate = 2 * r + (keycode >> (3 - ks));
+    return rate > 63 ? 63 : rate;
+}
+
+// Increment pattern per (rate & 3) for rates < 48: step index = (counter >> shift) & 7.
+static constexpr uint8_t kEgIncLo[4][8] = {
+    {0, 1, 0, 1, 0, 1, 0, 1},
+    {0, 1, 0, 1, 1, 1, 0, 1},
+    {0, 1, 1, 1, 0, 1, 1, 1},
+    {0, 1, 1, 1, 1, 1, 1, 1},
+};
+// Increment per sample for rates 48..63 (row = rate - 48, column = counter & 7).
+static constexpr uint8_t kEgIncHi[16][8] = {
+    {1, 1, 1, 1, 1, 1, 1, 1}, {1, 1, 1, 2, 1, 1, 1, 2}, {1, 2, 1, 2, 1, 2, 1, 2}, {1, 2, 2, 2, 1, 2, 2, 2},
+    {2, 2, 2, 2, 2, 2, 2, 2}, {2, 2, 2, 4, 2, 2, 2, 4}, {2, 4, 2, 4, 2, 4, 2, 4}, {2, 4, 4, 4, 2, 4, 4, 4},
+    {4, 4, 4, 4, 4, 4, 4, 4}, {4, 4, 4, 8, 4, 4, 4, 8}, {4, 8, 4, 8, 4, 8, 4, 8}, {4, 8, 8, 8, 4, 8, 8, 8},
+    {8, 8, 8, 8, 8, 8, 8, 8}, {8, 8, 8, 8, 8, 8, 8, 8}, {8, 8, 8, 8, 8, 8, 8, 8}, {8, 8, 8, 8, 8, 8, 8, 8},
+};
+
+// Returns the increment to apply this sample for rate r, or 0.
+static inline uint32_t eg_increment(uint32_t r, uint32_t counter) noexcept {
+    if (r == 0) return 0;
+    if (r >= 48) return kEgIncHi[r - 48][counter & 7];
+    const uint32_t shift = 11 - (r >> 2);
+    if (counter & ((1u << shift) - 1)) return 0;
+    return kEgIncLo[r & 3][(counter >> shift) & 7];
+}
+
+enum : uint8_t { kEgAttack = 0, kEgDecay1 = 1, kEgDecay2 = 2, kEgRelease = 3 };
+
+static inline uint32_t d1l_level(uint32_t d1l) noexcept { return (d1l == 15 ? 31u : d1l) << 5; }
+
+void Opm::eg_step(detail::OpState& o, uint32_t keycode) noexcept {
+    // Key transitions are sampled here, once per sample at the operator's slot.
+    if (o.key != o.key_on) {
+        o.key_on = o.key;
+        if (o.key_on) {
+            o.phase = 0;
+            o.eg_state = kEgAttack;
+            if (eg_effective_rate(o.ar, o.ks, keycode) >= 62) o.eg_level = 0;
+        } else {
+            o.eg_state = kEgRelease;
+        }
+    }
+    uint32_t rate = 0;
+    switch (o.eg_state) {
+    case kEgAttack:
+        if (o.eg_level == 0) {
+            o.eg_state = kEgDecay1;
+            rate = eg_effective_rate(o.d1r, o.ks, keycode);
+        } else {
+            rate = eg_effective_rate(o.ar, o.ks, keycode);
+        }
+        break;
+    case kEgDecay1:
+        if (o.eg_level >= d1l_level(o.d1l)) {
+            o.eg_state = kEgDecay2;
+            rate = eg_effective_rate(o.d2r, o.ks, keycode);
+        } else {
+            rate = eg_effective_rate(o.d1r, o.ks, keycode);
+        }
+        break;
+    case kEgDecay2: rate = eg_effective_rate(o.d2r, o.ks, keycode); break;
+    default: rate = eg_effective_rate(o.rr * 2 + 1, o.ks, keycode); break;
+    }
+    const uint32_t inc = eg_increment(rate, s_.eg_counter);
+    if (inc == 0) return;
+    if (o.eg_state == kEgAttack) {
+        // Exponential approach: level += (~level * inc) >> 4 with ~level = -(level + 1).
+        int32_t lvl = static_cast<int32_t>(o.eg_level);
+        lvl += (-(lvl + 1) * static_cast<int32_t>(inc)) >> 4;
+        o.eg_level = static_cast<uint16_t>(lvl < 0 ? 0 : lvl);
+    } else {
+        uint32_t lvl = o.eg_level + inc;
+        o.eg_level = static_cast<uint16_t>(lvl > 1023 ? 1023 : lvl);
+    }
+}
+
 // --- operator ---------------------------------------------------------------
 
 // Sine lookup with attenuation: phase index is 10 bits (one full cycle), att is
@@ -205,21 +295,13 @@ void Opm::clock() noexcept {
 void Opm::begin_sample() noexcept {
     s_.mix_l = 0;
     s_.mix_r = 0;
+    s_.eg_counter++;
 }
 
 void Opm::run_slot(uint32_t slot) noexcept {
     detail::OpState& o = s_.op[slot];
     detail::ChState& c = s_.ch[slot & 7];
-    // M1 milestone: envelope is a gate (0 attenuation while key is on).
-    if (o.key != o.key_on) {
-        o.key_on = o.key;
-        if (o.key_on) {
-            o.phase = 0;
-            o.eg_level = 0;
-        } else {
-            o.eg_level = 1023;
-        }
-    }
+    eg_step(o, (c.kc >> 2) & 31u);
     uint32_t att = o.eg_level + (static_cast<uint32_t>(o.tl) << 3);
     if (att > 1023) att = 1023;
     const int32_t out = op_output(o.phase >> 10, att << 2);
@@ -240,7 +322,6 @@ void Opm::end_sample() noexcept {
     s_.out_r = s_.mix_r;
 }
 
-void Opm::update_eg_timing() noexcept {}
 void Opm::update_lfo() noexcept {}
 void Opm::update_noise() noexcept {}
 void Opm::update_timers() noexcept {}

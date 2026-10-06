@@ -23,7 +23,9 @@ void setup_single(Opm& c, uint8_t kc, uint8_t kf, uint8_t dt1mul = 0x01, uint8_t
         const uint8_t o = uint8_t(slot * 8);
         w(c, uint8_t(0x40 + o), slot == 3 ? dt1mul : 0x01);
         w(c, uint8_t(0x60 + o), slot == 3 ? 0x00 : 0x7F);
+        w(c, uint8_t(0x80 + o), 0x1F); // AR=31
         w(c, uint8_t(0xC0 + o), uint8_t(dt2 << 6));
+        w(c, uint8_t(0xE0 + o), 0x0F);
     }
     w(c, 0x08, 0x40); // key on C2 only
 }
