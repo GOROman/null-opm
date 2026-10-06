@@ -42,7 +42,7 @@ else()
   endif()
 endif()
 
-if(NULLOPM_BUILD_TOOLS)
+if(NULLOPM_BUILD_TOOLS OR NULLOPM_BUILD_TESTS)
   add_subdirectory(tools)
 endif()
 if(NULLOPM_BUILD_EXAMPLES)

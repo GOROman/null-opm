@@ -19,7 +19,7 @@ Clean-room, cycle-accurate YAMAHA **YM2151 (OPM)** FM synthesizer emulator in C+
 | LFO (PM/AM) | planned (M4) |
 | Noise | planned (M5) |
 | Timers, IRQ, CT, CSM | planned (M6) |
-| VGM → WAV tool | planned (M7) |
+| VGM → WAV tool | done (M7, `vgm2wav`) |
 | Reference comparison harness | planned (M8) |
 | WASM demo / MCU examples | planned (M9/M10) |
 
@@ -36,6 +36,17 @@ WebAssembly:
 ```sh
 emcmake cmake --preset wasm && cmake --build --preset wasm
 ```
+
+## Tools
+
+```sh
+./build/tools/vgm2wav song.vgm song.wav              # native 55930 Hz
+./build/tools/vgm2wav --rate 44100 --loops 2 song.vgm song.wav
+./build/tools/vgm2wav song.vgm song.wav --regdump song.txt   # text register log
+```
+
+Text register logs (`.txt`) are also accepted as input: `clock <hz>`, `w <addr> <data>`,
+`wait <n/44100 s>`, `t<time> <addr> <data>`, `end <time>`. `.vgz` needs zlib at build time.
 
 ## Use
 
