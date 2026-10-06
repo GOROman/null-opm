@@ -126,6 +126,21 @@ void Opm::commit_write(uint8_t addr, uint8_t data) noexcept {
         return;
     }
     switch (addr) {
+    case reg::kTest: s_.lfo.reset = (data >> 1) & 1; break;
+    case reg::kLfoFreq: s_.lfo.freq = data; break;
+    case reg::kLfoDepth:
+        if (data & 0x80) s_.lfo.pmd = data & 0x7F;
+        else s_.lfo.amd = data & 0x7F;
+        break;
+    case reg::kCtLfoWave: {
+        s_.lfo.wave = data & 3;
+        const uint8_t ct = data >> 6;
+        if (ct != s_.ct) {
+            s_.ct = ct;
+            if (s_.cb.ct) s_.cb.ct(s_.cb.user, ct);
+        }
+        break;
+    }
     case reg::kKeyOn: {
         const int ch = data & 7;
         for (int slot = 0; slot < 4; ++slot) {
@@ -166,6 +181,79 @@ void Opm::recompute_phase_inc(int op) noexcept {
     // MUL: 0 = x0.5, 1..15 = x1..x15
     inc = o.mul ? inc * o.mul : inc >> 1;
     o.phase_inc = inc & 0xFFFFF;
+}
+
+// --- LFO -----------------------------------------------------------------------
+//
+// LFRQ splits into a 4-bit exponent (high nibble) and 4-bit mantissa: the LFO
+// counter advances by (16 + m) << e every sample and the 8-bit waveform phase
+// steps each time it passes kLfoStep. TUNED: kLfoStep is chosen so LFRQ = 0xFF
+// gives the datasheet's 32.6 Hz at 3.58 MHz (period 1716 samples).
+static constexpr uint32_t kLfoStep = 6807820;
+
+// PMS depth scaling applied to the +-127 PM value, in 1/64 semitone units >> 6.
+// Datasheet PMS table: max deviation 0, 5, 10, 20, 50, 100, 400, 700 cents.
+static constexpr uint16_t kPmsScale[8] = {0, 2, 3, 6, 16, 32, 129, 226};
+
+void Opm::update_lfo() noexcept {
+    detail::Lfo& l = s_.lfo;
+    if (l.reset) {
+        l.counter = 0;
+        l.phase = 0;
+    } else {
+        l.counter += static_cast<uint32_t>(16 + (l.freq & 15)) << (l.freq >> 4);
+        while (l.counter >= kLfoStep) {
+            l.counter -= kLfoStep;
+            l.phase++;
+            // noise: fresh 8-bit value each phase step from a 17-bit LFSR
+            const uint32_t bit = ((l.noise_lfsr >> 0) ^ (l.noise_lfsr >> 3)) & 1;
+            l.noise_lfsr = (l.noise_lfsr >> 1) | (bit << 16);
+            l.noise_val = static_cast<uint8_t>(l.noise_lfsr);
+        }
+    }
+    const uint32_t p = l.phase;
+    int32_t pm;   // -128..127
+    uint32_t am;  // 0..255, 0 = no attenuation
+    switch (l.wave) {
+    case 0: // sawtooth
+        pm = static_cast<int32_t>(p < 128 ? p : p - 256);
+        am = p;
+        break;
+    case 1: // square
+        pm = p < 128 ? 127 : -128;
+        am = p < 128 ? 0 : 255;
+        break;
+    case 2: { // triangle
+        const uint32_t t = (p + 64) & 255;
+        pm = static_cast<int32_t>(t < 128 ? 2 * t : 511 - 2 * t) - 128;
+        am = p < 128 ? 2 * p : 511 - 2 * p;
+        break;
+    }
+    default: // noise
+        pm = static_cast<int32_t>(l.noise_val) - 128;
+        am = l.noise_val;
+        break;
+    }
+    l.pm = static_cast<int16_t>((pm * l.pmd) >> 7);
+    l.am = static_cast<uint8_t>((am * l.amd) >> 8);
+    for (int ch = 0; ch < kChannels; ++ch) {
+        const detail::ChState& c = s_.ch[ch];
+        const int16_t applied = static_cast<int16_t>((l.pm * kPmsScale[c.pms]) >> 6);
+        if (applied != l.pm_applied[ch]) {
+            l.pm_applied[ch] = applied;
+            for (int slot = 0; slot < 4; ++slot) recompute_phase_inc(op_index(slot, ch));
+        }
+    }
+}
+
+// AMS: 0 = off, 1 = 1.4 dB, 2 = 5.9 dB, 3 = 11.8 dB (datasheet) in 48 dB / 512 units.
+static inline uint32_t am_attenuation(uint32_t am, uint32_t ams) noexcept {
+    switch (ams) {
+    case 1: return am >> 3;
+    case 2: return am >> 1;
+    case 3: return am;
+    default: return 0;
+    }
 }
 
 // --- envelope generator -----------------------------------------------------
@@ -296,6 +384,7 @@ void Opm::begin_sample() noexcept {
     s_.mix_l = 0;
     s_.mix_r = 0;
     s_.eg_counter++;
+    update_lfo();
 }
 
 // Processing order of the 32 operator slots within a sample. Operators are
@@ -364,6 +453,7 @@ void Opm::run_slot(uint32_t cycle) noexcept {
         mod = mod_input(s_, ch, slot, c.con) >> 1;
     }
     uint32_t att = o.eg_level + (static_cast<uint32_t>(o.tl) << 3);
+    if (o.ame) att += am_attenuation(s_.lfo.am, c.ams);
     if (att > 1023) att = 1023;
     const uint32_t phase10 = ((o.phase >> 10) + static_cast<uint32_t>(mod)) & 0x3FF;
     const int32_t out = op_output(phase10, att << 2);
@@ -384,7 +474,6 @@ void Opm::end_sample() noexcept {
     s_.out_r = detail::dac_quantize(s_.mix_r);
 }
 
-void Opm::update_lfo() noexcept {}
 void Opm::update_noise() noexcept {}
 void Opm::update_timers() noexcept {}
 
