@@ -46,6 +46,7 @@ struct Lfo {
     uint8_t noise_val = 0;
     uint8_t am = 0;    // 0..127 (unsigned)
     int16_t pm = 0;    // signed
+    int16_t pm_applied[kChannels] = {}; // PM offset currently folded into each channel's pitch
 };
 
 struct Noise {
